@@ -1,9 +1,11 @@
+import re
 import requests
 import zipfile
 import io
 import pandas as pd
 import fasttext.util
 import numpy as np
+import os
 from numpy.linalg import norm
 
 # Set up the request with a browser-like User-Agent
@@ -14,6 +16,8 @@ headers = {
 
 response = requests.get(url, headers=headers)
 zip_bytes = io.BytesIO(response.content)
+
+df = None
 
 with zipfile.ZipFile(zip_bytes) as z:
     file_names = z.namelist()
@@ -26,59 +30,59 @@ with zipfile.ZipFile(zip_bytes) as z:
     else:
         print("No .xlsx file found in the archive.")
 
+# Get the directory of the current Python file
+current_dir = os.path.dirname(os.path.abspath(__file__))
 
-# print(sum(df['TOT_EMP']))
-# print(df[['OCC_TITLE', 'TOT_EMP', 'H_MEAN', 'H_MEDIAN', 'A_MEAN', 'A_MEDIAN']][:10])
+# Save the original working directory
+original_dir = os.getcwd()
 
-min_emp = max(df['TOT_EMP'])
-print(min_emp)
-print(df[df['TOT_EMP'] == min_emp]['OCC_TITLE'])
+try:
+    # Change to the directory where the script is located
+    os.chdir(current_dir)
 
-fasttext.util.download_model('en', if_exists='ignore')
-ft = fasttext.load_model('cc.en.300.bin')
+    # Download the model (it will now save in the current script directory)
+    fasttext.util.download_model('en', if_exists='ignore')
+    ft = fasttext.load_model('cc.en.300.bin')
+
+finally:
+    # Change back to the original working directory
+    os.chdir(original_dir)
+
 fasttext.util.reduce_model(ft, 100)
 
 def sentence_embedder(row):
-    word_embeds = [ft.get_word_vector(w) for w in list(row['OCC_TITLE'])]
-    return np.mean(word_embeds)
+    word_embeds = [ft.get_word_vector(w) for w in list(row['LOW_TITLE'])]
+    return sum(word_embeds) / len(word_embeds)
 
 def embed_words(words):
     word_embeds = [ft.get_word_vector(w) for w in words]
-    return np.mean(word_embeds)
+    return sum(word_embeds) / len(word_embeds)
 
 def cosine_sim(a, b):
     return np.dot(a, b) / (norm(a) * norm(b))
 
+def clean_string(row):
+    text = row['OCC_TITLE']
+    return re.sub(r"[^a-zA-Z\s]", "", text).lower()
+
+df['LOW_TITLE'] = df.apply(clean_string, axis=1)
 df['EMBEDS'] = df.apply(sentence_embedder, axis=1)
 print(df[['OCC_TITLE', 'EMBEDS']])
 
-test_sentence = "I like dogs"
+test_sentence = "software development".lower()
 test_embed = embed_words(test_sentence)
 
-top3diff = [None, None, None]
-top3jobs = [None, None, None]
+similarities = []
 
-for row in df:
+for index, row in df.iterrows():
     diff = cosine_sim(test_embed, row['EMBEDS'])
-    if top3diff[0] is None or diff > top3diff[0]:
-        top3diff[2] = top3diff[1]
-        top3diff[1] = top3diff[0]
-        top3diff[0] = diff
-        top3jobs[2] = top3jobs[1]
-        top3jobs[1] = top3jobs[0]
-        top3jobs[0] = row['OCC_TITLE']
-        continue
-    elif top3diff[1] is None or diff > top3diff[1]:
-        top3diff[2] = top3diff[1]
-        top3diff[1] = diff
-        top3jobs[2] = top3jobs[1]
-        top3jobs[1] = row['OCC_TITLE']
-        continue
-    elif top3diff[2] is None or diff > top3diff[2]:
-        top3diff[2] = diff
-        top3jobs[2] = row['OCC_TITLE']
-        continue
-    else:
-        continue
+    similarities.append((diff, row))
+
+# Sort by similarity in descending order
+top3 = sorted(similarities, key=lambda x: x[0], reverse=True)[:3]
+
+# Separate top3diff and top3jobs
+top3diff = [item[0] for item in top3]
+top3jobs = [item[1]['OCC_TITLE'] for item in top3]
 
 print(top3jobs)
