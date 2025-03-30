@@ -172,4 +172,8 @@ cython_debug/
 
 # PyPI configuration file
 .pypirc
-cc.en.330.bin
+
+# Project specific
+data/
+model/
+.python-version
